@@ -171,21 +171,21 @@ int main() {
 
 						//Find the closest vehicles which are in the same lane as the ego car or to the left or right
 						for(int i = 0; i < sensor_fusion.size(); i++){
-							float d = sensor_fusion[i][6];
-							double vx = sensor_fusion[i][3];
+							float d = sensor_fusion[i][6]; //lane of nearby car
+							double vx = sensor_fusion[i][3]; 
 							double vy = sensor_fusion[i][4];
 							double check_speed = sqrt(vx*vx+vy*vy);
 							double check_car_s = sensor_fusion[i][5];
 							
-							check_car_s += ((double)prev_size*.02*check_speed);
+							check_car_s += ((double)prev_size*.02*check_speed); //project the s value for the nearby car
 							
-							if(d > 0 && d < 4){
+							if(d > 0 && d < 4){ //left lane
 								check_car_lane = 0;
 							}
-							else if(d > 4 && d < 8){
+							else if(d > 4 && d < 8){ //center lane
 								check_car_lane = 1;
 							}
-							else if(d > 8 && d < 12){
+							else if(d > 8 && d < 12){ //right lane
 								check_car_lane = 2;
 							}
 							
@@ -201,7 +201,8 @@ int main() {
 							}							
 							else if(check_car_lane - lane < 0) //another car in left lane 
 							{
-								//check the distance of the other car in the left lane. Should be greater than 30ft
+								//check the distance of the other car in the left lane. First condition checks for trailing car in left lane and 2nd condition 
+								//checks for a car in front in the left lane. In either case car is considered close for a lane change if distance < 30m
 								if((check_car_s < car_s && car_s - check_car_s < 30) || (check_car_s > car_s && check_car_s - car_s < 30) ){ //TODO: refactor this
 									car_on_left = true;
 								}
@@ -234,7 +235,7 @@ int main() {
                   lane = 1; 
                 }
               }
-							if(ref_vel < MAX_SPEED){
+							if(ref_vel < MAX_SPEED){ //rev up!
 								ref_vel += MAX_ACC;
 							}
 						}
@@ -243,8 +244,7 @@ int main() {
 						// define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
 
           	
-						//list of waypoints
-						
+						//vectors to store calculated waypoints, these will be sent to he simulator						
 						vector<double> ptsx;
 						vector<double> ptsy;
 
@@ -257,6 +257,10 @@ int main() {
 						//Just getting stated, ref is car's starting point
 						if(prev_size < 2){	
 							
+							/*	
+							Lines below create path that's tangential to the angle of the car. Coords in this case are generated using the previous pts which in this case
+							are the car's starting pts
+							*/
 							double prev_car_x = car_x - cos(car_yaw);
 							double prev_car_y = car_y - sin(car_yaw);
 							
@@ -267,7 +271,9 @@ int main() {
 							ptsy.push_back(car_y);
 						}
 						else{
-							
+							//Make sure its tangent by using the last & second to last. Added to ptsx & ptsy
+							//change ref x & y to last element in previous paath and then calculate using arctan
+							//what were the last couple points & the angle from the prvious points and push them to prev pts x & y
 							ref_x = previous_path_x[prev_size-1];
 							ref_y = previous_path_y[prev_size-1];
 
@@ -283,7 +289,10 @@ int main() {
 
 						}
 						
-						//Next set of waypoints
+						//Next set of waypoints using frenet
+						//lines below make sure frenet is spaced far apart. Instead of creting short spaced these are just 3 pts spaced 30m apart
+						
+						//d coords calculated using the 2nd parm
 						vector<double> next_wp0 = getXY(car_s+30,2+4*lane,map_waypoints_s,map_waypoints_x,map_waypoints_y);
 						vector<double> next_wp1 = getXY(car_s+60,2+4*lane,map_waypoints_s,map_waypoints_x,map_waypoints_y);
 						vector<double> next_wp2 = getXY(car_s+90,2+4*lane,map_waypoints_s,map_waypoints_x,map_waypoints_y);
@@ -297,7 +306,7 @@ int main() {
 						ptsy.push_back(next_wp1[1]);
 						ptsy.push_back(next_wp2[1]);
 
-						
+						//transformation for shift & rotation. from MPC. so that the ref angle from car's perspective is always 0 deg
 						for(int i = 0; i < ptsx.size(); i++){
 							double shift_x = ptsx[i] - ref_x;
 							double shift_y = ptsy[i] - ref_y;
@@ -307,52 +316,58 @@ int main() {
 							
 						}
 
+						//define spline and set x & y pts
 						tk::spline sp;
 						sp.set_points(ptsx,ptsy);
 
-						
+						//for holding the future path
 						vector<double> next_x_vals;
           	vector<double> next_y_vals;
 						
+						//add prev pts to the path planner
 						for(int i = 0; i < prev_size; i++){
 							next_x_vals.push_back(previous_path_x[i]);
 							next_y_vals.push_back(previous_path_y[i]);
 						}
 
+						//get pts spaced along the line and spaced apart to maintain car speed
+						//calculate distance from car to the target, which in this case is 30 pts away
+						//spline gives all the y values
 						double target_x = 30.0;
 						double target_y = sp(target_x);
+						//distance calculation from the car to target
 						double target_dist = sqrt(target_x*target_x + target_y*target_y);
+						//for transformation starting from the origin
 						double x_add_on = 0;
 
 						
 						for(int i = 1; i < 50 - prev_size; i++)
 						{
 							
-							/*
-							if ( ref_vel > MAX_SPEED ) {
-									ref_vel = MAX_SPEED;
-							}
-							*/
+							//Add the pts along the spline
+							//N is # of points. times .002 since the car vists a point every .002 sec
+							//will get the full distance in meters
+							//convert mph to meters/sec
 							double N = target_dist/(0.02*ref_vel/2.24);
 							double x_point = x_add_on + target_x/N;
+							//get the y value for each x from the spline
 							double y_point = sp(x_point);
 							x_add_on = x_point;
 
 							double x_ref = x_point;
 							double y_ref = y_point;
 
+							//go back to global from local
 							x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
 							y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
 
 							x_point += ref_x;
 							y_point += ref_y;
 
+							//push to forward way pts
 							next_x_vals.push_back(x_point);
 							next_y_vals.push_back(y_point);
-						}
-
-						
-						
+						}					
 
 						
 
